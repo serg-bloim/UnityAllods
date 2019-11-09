@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using SearchPathApi;
 using UnityEngine;
 
 public interface IUnitAction
@@ -778,7 +779,7 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
     private IEnumerator<Vector2i> LastPath = null;
     private IEnumerator<Vector2i> Pathfind(int left, int top, int right, int bottom, float distance)
     {
-        AstarPathfinder p = new AstarPathfinder();
+        ISearchAlgorithm<Vector2i> p = new AstarPathfinder(this, distance, true);
         // for now generate astar path once
         //Debug.LogFormat("Pathfind: Started at {0}, {1}", X, Y);
         bool doRestart;
@@ -786,7 +787,8 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
         {
             doRestart = false;
             // main check: static only
-            List<Vector2i> nodes = p.FindPath(this, X, Y, left, top, right, bottom, distance, true);
+            List<Vector2i> nodes = p.search(new SearchContext(this, new Vector2i(X, Y), new Vector2i(left, top), new Vector2i(right, bottom), distance, true)).getPath();
+//            List<Vector2i> nodes = p.FindPath(this, X, Y, left, top, right, bottom);
             if (nodes == null)
             {
                 while (true)
@@ -804,7 +806,7 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
                 if (!Interaction.CheckWalkableForUnit(node.x, node.y, false))
                 {
                     // try 1: find limited astar to target, ignoring blocked cells
-                    List<Vector2i> altNodes = p.FindPath(this, X, Y, left, top, right, bottom, distance, false, 16);
+                    List<Vector2i> altNodes = p.search(new SearchContext(this, new Vector2i(X, Y), new Vector2i(left, top), new Vector2i(right, bottom), distance, false)).getPath();
                     if (altNodes != null)
                     {
                         //Debug.LogFormat("Pathfind: Choose Dynamic to Goal at {0}, {1}", node.x, node.y);
@@ -816,7 +818,7 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
 
                             if (altNodes == null)
                             {
-                                altNodes = p.FindPath(this, X, Y, left, top, right, bottom, distance, false, 16);
+                                altNodes = p.search(new SearchContext(this, new Vector2i(X, Y), new Vector2i(left, top), new Vector2i(right, bottom), distance, false)).getPath();
                                 if (altNodes == null)
                                 {
                                     altDoRestart = true;
@@ -883,7 +885,7 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
 
                         // find path...
                         // if not found, then we are blocked. try finding again until unblocked
-                        List<Vector2i> alt2Nodes = p.FindPath(this, X, Y, nodes[lastFreeNode].x, nodes[lastFreeNode].y, nodes[lastFreeNode].x, nodes[lastFreeNode].y, 0, false, 16);
+                        List<Vector2i> alt2Nodes = p.search(new SearchContext(this, new Vector2i(X, Y), new Vector2i(nodes[lastFreeNode].x, nodes[lastFreeNode].y), new Vector2i(nodes[lastFreeNode].x, nodes[lastFreeNode].y), 0, false)).getPath();
                         bool pathfindSuccess = false;
                         bool alt2DoRestart;
                         do
@@ -902,11 +904,11 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
                                     lastNode++;
                                 }
 
-                                alt2Nodes = p.FindPath(this, X, Y, nodes[lastFreeNode].x, nodes[lastFreeNode].y, nodes[lastFreeNode].x, nodes[lastFreeNode].y, 0, false, 16);
+                                alt2Nodes =  p.search(new SearchContext(this, new Vector2i(X, Y), new Vector2i(nodes[lastFreeNode].x, nodes[lastFreeNode].y), new Vector2i(nodes[lastFreeNode].x, nodes[lastFreeNode].y), 0, false)).getPath();
                                 if (alt2Nodes == null && nextFreeNode >= 0)
                                 {
                                     // try with updated free node
-                                    alt2Nodes = p.FindPath(this, X, Y, nodes[nextFreeNode].x, nodes[nextFreeNode].y, nodes[nextFreeNode].x, nodes[nextFreeNode].y, 0, false, 16);
+                                    alt2Nodes = p.search(new SearchContext(this, new Vector2i(X, Y), new Vector2i(nodes[lastFreeNode].x, nodes[lastFreeNode].y), new Vector2i(nodes[lastFreeNode].x, nodes[lastFreeNode].y), 0, false)).getPath();
                                     if (alt2Nodes != null)
                                     {
                                         // if found path with nextFreeNode, but not with lastFreeNode, continue path this way...
@@ -1522,5 +1524,84 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
     public virtual DamageFlags GetDamageType()
     {
         return DamageFlags.Raw;
+    }
+
+    class SearchContext : SearchContext<Vector2i>
+    {
+        private readonly MapUnit _mapUnit;
+        private readonly Vector2i toStart;
+        private readonly Vector2i toEnd;
+        private readonly float distance;
+        private readonly bool _staticOnly;
+        private readonly int _limit;
+        private int toCenterX;
+        private int toCenterY;
+        private float distanceModifier;
+        public int width { get; }
+        public int height { get; }
+        public Vector2i start { get; }
+        
+        public SearchContext(MapUnit mapUnit, Vector2i @from, Vector2i toStart, Vector2i toEnd, float distance,
+            bool staticOnly)
+        {
+            _mapUnit = mapUnit;
+            start = @from;
+            this.distance = distance;
+            _staticOnly = staticOnly;
+            this.toStart = toStart; 
+            this.toEnd= toEnd; 
+            toCenterX = (toEnd.x + toStart.x) / 2;
+            toCenterY = (toEnd.y + toStart.y) / 2;
+            distanceModifier = distance + (float)((toEnd.x - toStart.x) + (toEnd.y - toStart.y)) / 2;
+
+        }
+
+        public bool isWalkable(Vector2i @from, Vector2i to)
+        {
+            return _mapUnit.Interaction.CheckWalkableForUnit(to.x, to.y, _staticOnly);
+        }
+
+        public bool isFinalState(Vector2i val)
+        {
+            return (val.x >= toStart.x && val.x <= toEnd.x && val.y >= toStart.y &&
+                    val.y <= toEnd.y) || // if path is directly contained in the goal list
+                   (new Vector2i(val.y - toCenterX, val.y - toCenterY).magnitude <= distance);
+        }
+
+        public ICollection<Vector2i> getNeighbors(Vector2i p)
+        {
+            var list = new List<Vector2i>();
+            for (int nx = -1; nx <= 1; nx++)
+            {
+                for (int ny = -1; ny <= 1; ny++)
+                {
+                    if (nx == 0 && ny == 0)
+                        continue;
+                    list.Add(new Vector2i(nx, ny));
+                }
+            }
+
+            return list;
+        }
+
+        public int travelCost(Vector2i @from, Vector2i to)
+        {
+            var dx = @from.x - to.x;
+            var dy = @from.y - to.y;
+            if (dx != 0 && dy != 0)
+            {
+                return 15;
+            }
+            else
+            {
+                return 10;
+            }
+        }
+
+        public int estimateCost(Vector2i @from)
+        {
+            return (int)(new Vector2i(from.x - toCenterX, from.y - toCenterY).magnitude*10);
+        }
+
     }
 }

@@ -1,9 +1,25 @@
 ﻿using System;
 using System.Collections.Generic;
+using SearchPathApi;
 using UnityEngine;
 
-class AstarPathfinder
+class AstarPathfinder : ISearchAlgorithm<Vector2i>
 {
+    private readonly MapUnit mapUnit;
+    private readonly float distance;
+    private bool isStaticOnly;
+    private bool found = false;
+    private int limit;
+    private SearchContext<Vector2i> ctx;
+
+    public AstarPathfinder(MapUnit mapUnit, float distance, bool isStaticOnly, int limit = -1)
+    {
+        this.mapUnit = mapUnit;
+        this.distance = distance;
+        this.isStaticOnly = isStaticOnly;
+        this.limit = limit;
+    }
+
     private class AstarNode
     {
         public AstarNode Parent;
@@ -73,17 +89,13 @@ class AstarPathfinder
                 (new Vector2i(x - toCenterX, y - toCenterY).magnitude <= distance)); // or distance is enough
     }
 
-    public List<Vector2i> FindPath(MapUnit unit, int x, int y, int toStartX, int toStartY, int toEndX, int toEndY, float distance, bool staticOnly, int limit = -1)
+    public List<Vector2i> FindPath(MapUnit unit, int x, int y, bool staticOnly, int limit = -1)
     {
-        int toCenterX = (toEndX + toStartX) / 2;
-        int toCenterY = (toEndY + toStartY) / 2;
-        float distanceModifier = distance + (float)((toEndX - toStartX) + (toEndY - toStartY)) / 2;
-
         LinkedList<AstarNode> openNodes = new LinkedList<AstarNode>();
         HashSet<uint> closedNodes = new HashSet<uint>();
         int numOpenNodes = 1;
 
-        openNodes.AddFirst(new AstarNode(null, x, y, 0, Heuristic(x, y, toCenterX, toCenterY)));
+        openNodes.AddFirst(new AstarNode(null, x, y, 0, ctx.estimateCost(new Vector2i(x,y))));
 
         int searchFromX = 0;
         int searchFromY = 0;
@@ -109,9 +121,9 @@ class AstarPathfinder
             // first node is guaranteed to have lowest heuristic
             // check if this node is Goal
             AstarNode val = node.Value;
-            if ((val.X >= toStartX && val.X <= toEndX && val.Y >= toStartY && val.Y <= toEndY) || // if path is directly contained in the goal list
-                (new Vector2i(val.X - toCenterX, val.Y - toCenterY).magnitude <= distance)) // or distance is enough
+            if (ctx.isFinalState(new Vector2i(val.X, val.Y))) // or distance is enough
             {
+                found = true;
                 return GetPath(val);
             }
 
@@ -175,7 +187,7 @@ class AstarPathfinder
                         existing.X = offsX;
                         existing.Y = offsY;
                         existing.GScore = gscore;
-                        existing.FScore = existing.GScore + Heuristic(offsX, offsY, toCenterX, toCenterY);
+                        existing.FScore = existing.GScore + ctx.estimateCost(new Vector2i(offsX, offsY));
 
                         if (nnode != null)
                             openNodes.Remove(nnode);
@@ -207,6 +219,25 @@ class AstarPathfinder
 
         return null;
 
+    }
+
+    public ISearchResult<Vector2i> search(SearchContext<Vector2i> ctx)
+    {
+        var start = ctx.start;
+        limit = 16;
+        this.ctx = ctx; 
+        var path = FindPath(mapUnit, start.x, start.y, isStaticOnly, limit);
+        SearchState searchState;
+        if (path == null)
+            searchState = SearchState.NONE;
+        else
+            searchState = SearchState.FINISHED;
+        if (found)
+        {
+            searchState |= SearchState.FOUND;
+        }
+
+        return new StandardSearchResult<Vector2i>(searchState, path);
     }
 }
 
